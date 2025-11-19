@@ -1,3 +1,3 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_n8n_campaign_user,n8n.campaign user,model_n8n_campaign,base.group_user,1,1,1,1
-access_n8n_campaign_log_user,n8n.campaign.log user,model_n8n_campaign_log,base.group_user,1,0,0,0
+access_n8n_campaign_log_user,n8n.campaign.log user,model_n8n_campaign_log,base.group_user,1,1,1,0
