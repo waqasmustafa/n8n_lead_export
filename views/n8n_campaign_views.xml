@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+
+    <!-- Tree View -->
+    <record id="view_n8n_campaign_tree" model="ir.ui.view">
+        <field name="name">n8n.campaign.tree</field>
+        <field name="model">n8n.campaign</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="name"/>
+                <field name="target_model"/>
+                <field name="webhook_url"/>
+                <field name="record_count" string="Matching Records"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_n8n_campaign_form" model="ir.ui.view">
+        <field name="name">n8n.campaign.form</field>
+        <field name="model">n8n.campaign</field>
+        <field name="arch" type="xml">
+            <form string="n8n Campaign">
+                <header>
+                    <button name="action_send_to_n8n"
+                            type="object"
+                            string="Send to n8n"
+                            class="btn-primary"
+                            help="Send matching records to the configured n8n Webhook URL."/>
+                </header>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="target_model"/>
+                        <field name="webhook_url" placeholder="Paste your n8n Webhook URL here"/>
+                    </group>
+
+                    <group string="Filter">
+                        <!-- Domain builder widget -->
+                        <field name="filter_domain"
+                               widget="domain"
+                               options="{'model': 'crm.lead'}"/>
+                        <field name="record_count" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_n8n_campaign" model="ir.actions.act_window">
+        <field name="name">n8n Campaigns</field>
+        <field name="res_model">n8n.campaign</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+    <!-- Menu under CRM (Configuration) -->
+    <menuitem id="menu_n8n_campaign_root"
+              name="n8n Campaigns"
+              parent="crm.crm_menu_configuration"
+              action="action_n8n_campaign"
+              sequence="50"/>
+
+</odoo>
