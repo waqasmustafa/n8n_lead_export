@@ -48,11 +48,10 @@
                         <field name="record_count" readonly="1"/>
                     </group>
 
-                    <!-- Logs table -->
                     <group string="Send Logs">
                         <field name="log_ids" readonly="1">
                             <tree create="0" edit="0" delete="0">
-                                <field name="lead_id" string="Lead"/>
+                                <field name="id" string="ID"/>
                                 <field name="name"/>
                                 <field name="email"/>
                                 <field name="status"/>
