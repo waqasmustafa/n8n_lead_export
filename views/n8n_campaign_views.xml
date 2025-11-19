@@ -54,10 +54,9 @@
         <field name="view_mode">list,form</field>
     </record>
 
-    <!-- Menu -->
+    <!-- Menu (TOP LEVEL, no parent) -->
     <menuitem id="menu_n8n_campaign_root"
               name="n8n Campaigns"
-              parent="crm.crm_menu_configuration"
               action="action_n8n_campaign"
               sequence="50"/>
 </odoo>
