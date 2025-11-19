@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <odoo>
 
-    <!-- Tree View -->
-    <record id="view_n8n_campaign_tree" model="ir.ui.view">
-        <field name="name">n8n.campaign.tree</field>
+    <!-- List (Tree) View -->
+    <record id="view_n8n_campaign_list" model="ir.ui.view">
+        <field name="name">n8n.campaign.list</field>
         <field name="model">n8n.campaign</field>
+        <field name="type">list</field>
         <field name="arch" type="xml">
-            <tree>
+            <list string="n8n Campaigns">
                 <field name="name"/>
                 <field name="target_model"/>
                 <field name="webhook_url"/>
-                <field name="record_count" string="Matching Records"/>
-            </tree>
+                <field name="record_count"/>
+            </list>
         </field>
     </record>
 
@@ -24,19 +25,18 @@
                 <header>
                     <button name="action_send_to_n8n"
                             type="object"
-                            string="Send to n8n"
                             class="btn-primary"
-                            help="Send matching records to the configured n8n Webhook URL."/>
+                            string="Send to n8n"/>
                 </header>
+
                 <sheet>
                     <group>
                         <field name="name"/>
                         <field name="target_model"/>
-                        <field name="webhook_url" placeholder="Paste your n8n Webhook URL here"/>
+                        <field name="webhook_url" placeholder="Paste your n8n Webhook URL"/>
                     </group>
 
                     <group string="Filter">
-                        <!-- Domain builder widget -->
                         <field name="filter_domain"
                                widget="domain"
                                options="{'model': 'crm.lead'}"/>
@@ -51,14 +51,13 @@
     <record id="action_n8n_campaign" model="ir.actions.act_window">
         <field name="name">n8n Campaigns</field>
         <field name="res_model">n8n.campaign</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">list,form</field>
     </record>
 
-    <!-- Menu under CRM (Configuration) -->
+    <!-- Menu -->
     <menuitem id="menu_n8n_campaign_root"
               name="n8n Campaigns"
               parent="crm.crm_menu_configuration"
               action="action_n8n_campaign"
               sequence="50"/>
-
 </odoo>
