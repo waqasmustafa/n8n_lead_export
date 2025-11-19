@@ -5,10 +5,14 @@
         <field name="model_id" ref="model_n8n_campaign"/>
         <field name="state">code</field>
         <field name="code">model._cron_run_n8n_campaigns()</field>
-        <!-- Har 5 minute me run (chahe to baad me change kar sakte ho) -->
+
+        <!-- Har 5 minute me run -->
         <field name="interval_number">5</field>
         <field name="interval_type">minutes</field>
-        <field name="numbercall">-1</field>
+
+        <!-- (optional but recommended) cron kis user ke context me chale -->
+        <field name="user_id" ref="base.user_root"/>
+
         <field name="active">True</field>
     </record>
 </odoo>
