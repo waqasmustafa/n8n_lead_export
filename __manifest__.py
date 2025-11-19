@@ -1,3 +1,5 @@
+# __manifest__.py
+
 {
     "name": "n8n Lead Export",
     "version": "18.0.1.0.0",
@@ -8,6 +10,7 @@
     "data": [
         "security/ir.model.access.csv",
         "views/n8n_campaign_views.xml",
+        "data/n8n_cron.xml",   # ⬅️ NEW
     ],
     "application": False,
     "license": "LGPL-3",

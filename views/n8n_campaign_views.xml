@@ -12,6 +12,9 @@
                 <field name="target_model"/>
                 <field name="webhook_url"/>
                 <field name="delay_seconds"/>
+                <field name="start_time" widget="float_time"/>
+                <field name="end_time" widget="float_time"/>
+                <field name="is_active"/>
                 <field name="record_count"/>
             </list>
         </field>
@@ -23,22 +26,38 @@
         <field name="model">n8n.campaign</field>
         <field name="arch" type="xml">
             <form string="n8n Campaign">
-                <header>
+
+                <!-- Header button HATA DIYA (toggle use kar rahe) -->
+                <!-- <header>
                     <button name="action_send_to_n8n"
                             type="object"
                             class="btn-primary"
                             string="Send to n8n"/>
-                </header>
+                </header> -->
 
                 <sheet>
                     <group>
-                        <field name="name"/>
-                        <field name="target_model"/>
-                        <field name="webhook_url"
-                               placeholder="Paste your n8n Webhook URL"/>
-                        <field name="delay_seconds"
-                               placeholder="0"
-                               help="Delay in seconds between each record send."/>
+                        <group>
+                            <field name="name"/>
+                            <field name="target_model"/>
+                            <field name="webhook_url"
+                                   placeholder="Paste your n8n Webhook URL"/>
+                        </group>
+                        <group>
+                            <!-- NEW: toggle -->
+                            <field name="is_active" widget="boolean_toggle"/>
+                            <label for="is_active" string="Status"/>
+                            <field name="delay_seconds"
+                                   placeholder="0"
+                                   help="Delay in seconds between each record send."/>
+                            <!-- NEW: Start / End time fields -->
+                            <field name="start_time"
+                                   widget="float_time"
+                                   help="Local time-of-day when this campaign may start sending."/>
+                            <field name="end_time"
+                                   widget="float_time"
+                                   help="Local time-of-day when this campaign must stop sending."/>
+                        </group>
                     </group>
 
                     <group string="Filter">
