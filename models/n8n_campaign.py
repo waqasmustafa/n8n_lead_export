@@ -1,89 +1,40 @@
 import ast
 import logging
-
-from odoo import api, fields, models, _
+import time   # 👈 NEW
+from odoo import models, fields, api, _
 from odoo.exceptions import UserError
-
-_logger = logging.getLogger(__name__)
 
 try:
     import requests
 except ImportError:
     requests = None
 
+_logger = logging.getLogger(__name__)
+
 
 class N8nCampaign(models.Model):
     _name = "n8n.campaign"
-    _description = "n8n Lead Export Campaign"
+    _description = "n8n Campaign Export"
 
-    name = fields.Char(string="Campaign Name", required=True)
+    # --- existing fields (name, target_model, webhook_url, filter_domain, record_count) ---
 
-    target_model = fields.Selection(
-        selection=[
-            ("crm.lead", "Lead / Opportunity"),
-            # future: ("res.partner", "Contacts"),
-        ],
-        string="Target From",
-        default="crm.lead",
-        required=True,
+    delay_seconds = fields.Integer(
+        string="Delay (seconds)",
+        default=0,
+        help="Wait this many seconds before sending the next record to n8n.",
     )
 
-    webhook_url = fields.Char(
-        string="n8n Webhook URL",
-        help="Paste the n8n Webhook URL here.",
-        required=True,
-    )
-
-    filter_domain = fields.Char(
-        string="Filter",
-        default="[]",
-        help="Filter for records to send. Use the domain builder UI.",
-    )
-
-    record_count = fields.Integer(
-        string="Matching Records",
-        compute="_compute_record_count",
+    log_ids = fields.One2many(
+        "n8n.campaign.log",
+        "campaign_id",
+        string="Send Logs",
         readonly=True,
     )
 
-    @api.depends("filter_domain", "target_model")
-    def _compute_record_count(self):
-        for campaign in self:
-            model = campaign._get_target_model()
-            domain = campaign._get_domain()
-            if model is None:
-                campaign.record_count = 0
-                continue
-            campaign.record_count = model.search_count(domain)
+    # ... existing helpers _get_target_model, _get_domain, _compute_record_count ...
 
-    # -----------------------------
-    # Helpers
-    # -----------------------------
-    def _get_target_model(self):
-        """Return env model object based on target_model selection."""
-        self.ensure_one()
-        if self.target_model == "crm.lead":
-            return self.env["crm.lead"]
-        return None
-
-    def _get_domain(self):
-        """Parse the domain string into a Python list."""
-        self.ensure_one()
-        if not self.filter_domain:
-            return []
-        try:
-            value = ast.literal_eval(self.filter_domain)
-            if isinstance(value, (list, tuple)):
-                return value
-            raise ValueError("Domain must be list/tuple")
-        except Exception as e:
-            raise UserError(_("Invalid domain in Filter: %s") % e)
-
-    # -----------------------------
-    # Main Action
-    # -----------------------------
     def action_send_to_n8n(self):
-        """Collect matching records and send them to the n8n Webhook URL."""
+        """Send records one-by-one to n8n and log each attempt."""
         if requests is None:
             raise UserError(
                 _(
@@ -98,42 +49,75 @@ class N8nCampaign(models.Model):
 
             model = campaign._get_target_model()
             if model is None:
-                raise UserError(_("Unsupported target model: %s") % (campaign.target_model,))
+                raise UserError(
+                    _("Unsupported target model: %s") % (campaign.target_model,)
+                )
 
             domain = campaign._get_domain()
-            records = model.search(domain)
+            leads = model.search(domain)
 
-            # Build payload: ID, Name, Email only
-            payload_records = []
-            for rec in records:
-                email = getattr(rec, "email_from", False) or getattr(rec, "email", False)
-                payload_records.append(
+            _logger.info(
+                "Sending %s records one-by-one to n8n webhook %s",
+                len(leads),
+                campaign.webhook_url,
+            )
+
+            for lead in leads:
+                email = getattr(lead, "email_from", False) or getattr(
+                    lead, "email", False
+                )
+
+                # 1) create log as pending
+                log = self.env["n8n.campaign.log"].create(
                     {
-                        "id": rec.id,
-                        "name": rec.name or "",
+                        "campaign_id": campaign.id,
+                        "lead_id": lead.id,
+                        "lead_odoo_id": lead.id,
+                        "name": lead.name or "",
                         "email": email or "",
+                        "status": "pending",
                     }
                 )
 
-            payload = {
-                "campaign_id": campaign.id,
-                "campaign_name": campaign.name,
-                "target_model": campaign.target_model,
-                "count": len(payload_records),
-                "records": payload_records,
-            }
+                # 2) build payload for single record
+                payload = {
+                    "campaign_id": campaign.id,
+                    "campaign_name": campaign.name,
+                    "target_model": campaign.target_model,
+                    "count": 1,
+                    "records": [
+                        {
+                            "id": lead.id,
+                            "name": lead.name or "",
+                            "email": email or "",
+                        }
+                    ],
+                }
 
-            _logger.info("Sending %s records to n8n webhook %s", len(payload_records), campaign.webhook_url)
+                try:
+                    response = requests.post(
+                        campaign.webhook_url,
+                        json=payload,
+                        timeout=20,
+                    )
+                    log.http_status = str(response.status_code)
+                    log.sent_at = fields.Datetime.now()
 
-            try:
-                response = requests.post(
-                    campaign.webhook_url,
-                    json=payload,
-                    timeout=20,
-                )
-                response.raise_for_status()
-            except Exception as e:
-                _logger.exception("Error sending data to n8n")
-                raise UserError(_("Error sending data to n8n:\n%s") % e)
+                    if response.ok:
+                        log.status = "ok"
+                    else:
+                        log.status = "error"
+                        # short message only
+                        log.message = (response.text or "")[:500]
+
+                except Exception as e:
+                    _logger.exception("Error sending data to n8n")
+                    log.status = "error"
+                    log.sent_at = fields.Datetime.now()
+                    log.message = str(e)[:500]
+
+                # 3) delay before next lead
+                if campaign.delay_seconds and campaign.delay_seconds > 0:
+                    time.sleep(campaign.delay_seconds)
 
         return True
