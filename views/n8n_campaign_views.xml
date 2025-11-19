@@ -27,13 +27,13 @@
         <field name="arch" type="xml">
             <form string="n8n Campaign">
 
-                <!-- Header button HATA DIYA (toggle use kar rahe) -->
-                <!-- <header>
+                <header>
+                    <!-- Manual send button -->
                     <button name="action_send_to_n8n"
                             type="object"
                             class="btn-primary"
                             string="Send to n8n"/>
-                </header> -->
+                </header>
 
                 <sheet>
                     <group>
@@ -44,13 +44,13 @@
                                    placeholder="Paste your n8n Webhook URL"/>
                         </group>
                         <group>
-                            <!-- NEW: toggle -->
+                            <!-- Toggle -->
                             <field name="is_active" widget="boolean_toggle"/>
                             <label for="is_active" string="Status"/>
                             <field name="delay_seconds"
                                    placeholder="0"
                                    help="Delay in seconds between each record send."/>
-                            <!-- NEW: Start / End time fields -->
+                            <!-- Start / End time fields -->
                             <field name="start_time"
                                    widget="float_time"
                                    help="Local time-of-day when this campaign may start sending."/>

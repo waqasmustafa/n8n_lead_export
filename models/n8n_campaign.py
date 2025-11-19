@@ -59,14 +59,14 @@ class N8nCampaign(models.Model):
         help="Wait this many seconds before sending the next record to n8n.",
     )
 
-    # 🔁 NEW: toggle field
+    # 🔁 toggle field
     is_active = fields.Boolean(
         string="Active",
         default=False,
         help="If active, this campaign will be processed automatically by the scheduler.",
     )
 
-    # 🕒 NEW: start / end time (time-of-day, local to owner)
+    # 🕒 start / end time (time-of-day, local to owner)
     start_time = fields.Float(
         string="Start Time",
         help="Local time-of-day (campaign owner's timezone) when sending is allowed to start.",
@@ -155,7 +155,10 @@ class N8nCampaign(models.Model):
     # CORE SENDING LOGIC (reused by cron + manual)
     # ---------------------------------------------------
     def _send_pending_leads_via_n8n(self):
-        """Send only leads that have never been successfully sent (no OK log)."""
+        """
+        Send ALL matching leads to n8n (always resend),
+        respecting delay_seconds and logging each attempt.
+        """
         if requests is None:
             raise UserError(
                 _(
@@ -178,7 +181,7 @@ class N8nCampaign(models.Model):
             leads = model.search(domain)
 
             _logger.info(
-                "Cron sending %s records (only unsent) to n8n webhook %s",
+                "Sending %s records to n8n webhook %s",
                 len(leads),
                 campaign.webhook_url,
             )
@@ -186,17 +189,6 @@ class N8nCampaign(models.Model):
             Log = self.env["n8n.campaign.log"]
 
             for lead in leads:
-                # Skip if already successfully sent once
-                ok_log_exists = Log.search_count(
-                    [
-                        ("campaign_id", "=", campaign.id),
-                        ("lead_id", "=", lead.id),
-                        ("status", "=", "ok"),
-                    ]
-                )
-                if ok_log_exists:
-                    continue
-
                 email = getattr(lead, "email_from", False) or getattr(
                     lead, "email", False
                 )
@@ -255,10 +247,10 @@ class N8nCampaign(models.Model):
         return True
 
     # ---------------------------------------------------
-    # MANUAL ACTION (optional debug / CLI)
+    # MANUAL ACTION (debug / manual send)
     # ---------------------------------------------------
     def action_send_to_n8n(self):
-        """Manual trigger – uses the same 'pending only' logic."""
+        """Manual trigger – send all matching leads now."""
         return self._send_pending_leads_via_n8n()
 
     # ---------------------------------------------------
