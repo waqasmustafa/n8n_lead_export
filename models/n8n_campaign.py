@@ -1,6 +1,7 @@
 import ast
 import logging
-import time   # 👈 NEW
+import time
+
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 
@@ -16,7 +17,40 @@ class N8nCampaign(models.Model):
     _name = "n8n.campaign"
     _description = "n8n Campaign Export"
 
-    # --- existing fields (name, target_model, webhook_url, filter_domain, record_count) ---
+    # ---------------------------------------------------
+    # FIELDS
+    # ---------------------------------------------------
+    name = fields.Char(
+        string="Campaign Name",
+        required=True,
+    )
+
+    target_model = fields.Selection(
+        [
+            ("crm.lead", "Lead / Opportunity"),
+        ],
+        string="Target From",
+        default="crm.lead",
+        required=True,
+    )
+
+    webhook_url = fields.Char(
+        string="n8n Webhook URL",
+        required=True,
+        help="Paste the URL of the n8n webhook.",
+    )
+
+    filter_domain = fields.Char(
+        string="Filter",
+        default="[]",
+        help="Build record filter using domain widget.",
+    )
+
+    record_count = fields.Integer(
+        string="Matching Records",
+        compute="_compute_record_count",
+        readonly=True,
+    )
 
     delay_seconds = fields.Integer(
         string="Delay (seconds)",
@@ -31,8 +65,42 @@ class N8nCampaign(models.Model):
         readonly=True,
     )
 
-    # ... existing helpers _get_target_model, _get_domain, _compute_record_count ...
+    # ---------------------------------------------------
+    # COMPUTE & HELPERS
+    # ---------------------------------------------------
+    @api.depends("filter_domain", "target_model")
+    def _compute_record_count(self):
+        for campaign in self:
+            model = campaign._get_target_model()
+            domain = campaign._get_domain()
+            if not model:
+                campaign.record_count = 0
+                continue
+            campaign.record_count = model.search_count(domain)
 
+    def _get_target_model(self):
+        """Return env model object based on target_model selection."""
+        self.ensure_one()
+        if self.target_model == "crm.lead":
+            return self.env["crm.lead"]
+        return None
+
+    def _get_domain(self):
+        """Parse the domain string into a Python list."""
+        self.ensure_one()
+        if not self.filter_domain:
+            return []
+        try:
+            value = ast.literal_eval(self.filter_domain)
+            if isinstance(value, (list, tuple)):
+                return value
+            raise ValueError("Domain must be list/tuple")
+        except Exception as e:
+            raise UserError(_("Invalid domain in Filter: %s") % e)
+
+    # ---------------------------------------------------
+    # MAIN ACTION
+    # ---------------------------------------------------
     def action_send_to_n8n(self):
         """Send records one-by-one to n8n and log each attempt."""
         if requests is None:
@@ -107,9 +175,7 @@ class N8nCampaign(models.Model):
                         log.status = "ok"
                     else:
                         log.status = "error"
-                        # short message only
                         log.message = (response.text or "")[:500]
-
                 except Exception as e:
                     _logger.exception("Error sending data to n8n")
                     log.status = "error"
