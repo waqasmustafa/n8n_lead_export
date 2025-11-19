@@ -64,13 +64,14 @@ class N8nCampaign(models.Model):
     # Schedule / control
     is_active = fields.Boolean(string="Active", default=False)
 
-    start_time = fields.Selection(
+    # NEW NAMES so that DB creates proper selection fields
+    start_time_slot = fields.Selection(
         selection=TIME_SLOTS,
         string="Start Time",
         help="Local time (based on user timezone) when this campaign may start sending.",
     )
 
-    end_time = fields.Selection(
+    end_time_slot = fields.Selection(
         selection=TIME_SLOTS,
         string="End Time",
         help="Local time (based on user timezone) when this campaign must stop sending.",
@@ -167,21 +168,25 @@ class N8nCampaign(models.Model):
             return None
 
     def _is_within_schedule(self, local_time_str):
-        """Check if given local time (HH:MM) is between start_time and end_time."""
+        """Check if given local time (HH:MM) is between start_time_slot and end_time_slot."""
         self.ensure_one()
 
         # If no schedule defined -> always allowed
-        if not self.start_time and not self.end_time:
+        if not self.start_time_slot and not self.end_time_slot:
             return True
 
         now_min = self._time_to_minutes(local_time_str)
         if now_min is None:
             return True
 
-        start_min = self._time_to_minutes(self.start_time) if self.start_time else 0
+        start_min = (
+            self._time_to_minutes(self.start_time_slot)
+            if self.start_time_slot
+            else 0
+        )
         end_min = (
-            self._time_to_minutes(self.end_time)
-            if self.end_time
+            self._time_to_minutes(self.end_time_slot)
+            if self.end_time_slot
             else (24 * 60 - 1)
         )
 
@@ -270,7 +275,7 @@ class N8nCampaign(models.Model):
         )
 
     # ------------------------------------------------------------------
-    # Optional manual button (if you still use it)
+    # Manual button (optional)
     # ------------------------------------------------------------------
     def action_send_to_n8n(self):
         """
