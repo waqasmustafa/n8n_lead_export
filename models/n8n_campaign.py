@@ -1,50 +1,58 @@
 # -*- coding: utf-8 -*-
-import ast
 import logging
-import time as pytime
-from datetime import datetime
-
-from odoo import models, fields, api, _
-from odoo.exceptions import UserError
+from datetime import datetime, timedelta
 
 import pytz
+import requests
 
-try:
-    import requests
-except ImportError:  # pragma: no cover
-    requests = None
+from odoo import api, fields, models, _
+from odoo.exceptions import UserError
+from odoo.tools.safe_eval import safe_eval
 
 _logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Time slots helper (for dropdowns 00:00–23:30 in 30-minute steps)
+# ---------------------------------------------------------------------------
+def _get_time_slots():
+    slots = []
+    for hour in range(0, 24):
+        for minute in (0, 30):
+            value = f"{hour:02d}:{minute:02d}"
+            label_hour = hour % 12 or 12
+            label_min = f"{minute:02d}"
+            am_pm = "AM" if hour < 12 else "PM"
+            label = f"{label_hour}:{label_min} {am_pm}"
+            slots.append((value, label))
+    return slots
+
+
+TIME_SLOTS = _get_time_slots()
+
+
 class N8nCampaign(models.Model):
     _name = "n8n.campaign"
-    _description = "n8n Campaign Export"
+    _description = "n8n Campaign"
 
-    # -------------------------------------------------------------------------
-    # FIELDS
-    # -------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Fields
+    # ------------------------------------------------------------------
     name = fields.Char(string="Campaign Name", required=True)
 
     target_model = fields.Selection(
-        [
-            ("crm.lead", "Lead / Opportunity"),
-        ],
+        selection=[("crm.lead", "Lead / Opportunity")],
         string="Target From",
-        default="crm.lead",
         required=True,
+        default="crm.lead",
     )
 
-    webhook_url = fields.Char(
-        string="n8n Webhook URL",
-        help="Paste the URL of the n8n webhook.",
-    )
+    webhook_url = fields.Char(string="n8n Webhook URL", required=True)
 
-    # Domain for selecting records
     filter_domain = fields.Char(
         string="Filter",
         default="[]",
-        help="Build record filter using domain widget.",
+        help="Domain used to select records to send (Odoo domain syntax).",
     )
 
     record_count = fields.Integer(
@@ -53,253 +61,268 @@ class N8nCampaign(models.Model):
         readonly=True,
     )
 
+    # Schedule / control
+    is_active = fields.Boolean(string="Active", default=False)
+
+    start_time = fields.Selection(
+        selection=TIME_SLOTS,
+        string="Start Time",
+        help="Local time (based on user timezone) when this campaign may start sending.",
+    )
+
+    end_time = fields.Selection(
+        selection=TIME_SLOTS,
+        string="End Time",
+        help="Local time (based on user timezone) when this campaign must stop sending.",
+    )
+
     delay_seconds = fields.Integer(
         string="Delay (seconds)",
-        default=0,
-        help="Wait this many seconds between sending each record.",
+        default=5,
+        help="Delay in seconds between sending each record to n8n.",
     )
 
-    # 🔥 NEW: toggle + time window
-    is_active = fields.Boolean(
-        string="Active",
-        default=False,
-        help="If active, cron will automatically send leads to n8n "
-             "within the start/end time window.",
+    next_run_at = fields.Datetime(
+        string="Next Run At",
+        help="Internal field used by cron to respect delay_seconds.",
     )
 
-    # Stored as float hours; use widget='float_time' in the view
-    start_time = fields.Float(
-        string="Start Time",
-        help="Local start time (user timezone) when this campaign can send.",
-    )
-    end_time = fields.Float(
-        string="End Time",
-        help="Local end time (user timezone) when this campaign stops sending.",
-    )
-
+    # Logs
     log_ids = fields.One2many(
         "n8n.campaign.log",
         "campaign_id",
         string="Send Logs",
-        readonly=True,
     )
 
-    # -------------------------------------------------------------------------
-    # HELPERS
-    # -------------------------------------------------------------------------
-    @api.depends("filter_domain", "target_model")
+    # ------------------------------------------------------------------
+    # Computed fields
+    # ------------------------------------------------------------------
+    @api.depends("target_model", "filter_domain")
     def _compute_record_count(self):
         for campaign in self:
-            model = campaign._get_target_model()
-            if not model:
-                campaign.record_count = 0
-                continue
-            domain = campaign._get_domain()
-            try:
-                campaign.record_count = model.search_count(domain)
-            except Exception:
-                # In case domain is broken, don't crash the UI
-                campaign.record_count = 0
+            count = 0
+            if campaign.target_model:
+                try:
+                    domain = safe_eval(campaign.filter_domain or "[]")
+                except Exception as e:
+                    _logger.warning(
+                        "Invalid domain on n8n.campaign %s: %s",
+                        campaign.id,
+                        e,
+                    )
+                    domain = []
+                try:
+                    count = campaign.env[campaign.target_model].search_count(domain)
+                except Exception as e:
+                    _logger.warning(
+                        "Error computing record_count for n8n.campaign %s: %s",
+                        campaign.id,
+                        e,
+                    )
+            campaign.record_count = count
 
-    def _get_target_model(self):
-        """Return env model object based on target_model selection."""
-        self.ensure_one()
-        if self.target_model == "crm.lead":
-            return self.env["crm.lead"]
-        return None
-
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
     def _get_domain(self):
-        """Parse filter_domain string into a proper domain list."""
         self.ensure_one()
-        if not self.filter_domain:
-            return []
         try:
-            value = ast.literal_eval(self.filter_domain)
-            if isinstance(value, (list, tuple)):
-                return value
-            raise ValueError("Domain must be list/tuple")
+            return safe_eval(self.filter_domain or "[]")
         except Exception as e:
-            raise UserError(_("Invalid domain in Filter: %s") % e)
+            _logger.warning("Invalid domain on campaign %s: %s", self.id, e)
+            return []
 
-    # --- Time / timezone helpers ---------------------------------------------
-    def _get_user_tz_now(self):
-        """Return 'now' in the campaign owner's timezone."""
+    def _get_target_records(self):
+        """All records matching filter for this campaign."""
         self.ensure_one()
-        user = self.create_uid or self.env.user
-        tz_name = user.tz or "UTC"
-        try:
-            tz = pytz.timezone(tz_name)
-        except Exception:  # fallback
-            tz = pytz.UTC
-        return datetime.now(tz)
+        if not self.target_model:
+            return self.env["crm.lead"].browse()
+        domain = self._get_domain()
+        return self.env[self.target_model].search(domain, order="id")
 
-    def _is_within_time_window(self):
-        """Check if current local time is within start/end window.
-
-        Uses campaign creator's timezone (create_uid.tz).
+    # ---- Time helpers -------------------------------------------------
+    def _get_user_local_time(self):
+        """
+        Return (local_time_str, now_utc)
+        local_time_str -> 'HH:MM' in user's timezone.
         """
         self.ensure_one()
-        # No window configured -> always allowed
+        user = self.env.user
+        tz_name = user.tz or "UTC"
+        tz = pytz.timezone(tz_name)
+
+        now_utc = datetime.utcnow().replace(tzinfo=pytz.UTC)
+        local_dt = now_utc.astimezone(tz)
+        local_str = f"{local_dt.hour:02d}:{local_dt.minute:02d}"
+        return local_str, now_utc
+
+    @staticmethod
+    def _time_to_minutes(value):
+        if not value:
+            return None
+        try:
+            h, m = map(int, value.split(":"))
+            return h * 60 + m
+        except Exception:
+            return None
+
+    def _is_within_schedule(self, local_time_str):
+        """Check if given local time (HH:MM) is between start_time and end_time."""
+        self.ensure_one()
+
+        # If no schedule defined -> always allowed
         if not self.start_time and not self.end_time:
             return True
 
-        now_local = self._get_user_tz_now()
-        now_float = now_local.hour + now_local.minute / 60.0
+        now_min = self._time_to_minutes(local_time_str)
+        if now_min is None:
+            return True
 
-        # If only start is set
-        if self.start_time and not self.end_time:
-            return now_float >= self.start_time
+        start_min = self._time_to_minutes(self.start_time) if self.start_time else 0
+        end_min = (
+            self._time_to_minutes(self.end_time)
+            if self.end_time
+            else (24 * 60 - 1)
+        )
 
-        # If only end is set
-        if self.end_time and not self.start_time:
-            return now_float <= self.end_time
+        return start_min <= now_min <= end_min
 
-        # Both set
-        if self.start_time <= self.end_time:
-            return self.start_time <= now_float <= self.end_time
+    # ---- Sending helpers ----------------------------------------------
+    def _get_next_lead_to_send(self):
+        """Return next crm.lead that has not been sent yet (no log)."""
+        self.ensure_one()
 
-        # Edge case: start > end (crosses midnight) -> e.g., 22:00–02:00
-        return now_float >= self.start_time or now_float <= self.end_time
+        all_records = self._get_target_records()
+        if not all_records:
+            return None
 
-    # --- Core sending logic ---------------------------------------------------
-    def _prepare_lead_payload(self, lead):
-        email = getattr(lead, "email_from", False) or getattr(lead, "email", False)
-        return {
-            "id": lead.id,
-            "name": lead.name or "",
-            "email": email or "",
+        sent_ids = set(self.log_ids.mapped("lead_id").ids)
+
+        for rec in all_records:
+            if rec.id not in sent_ids:
+                return rec
+        return None
+
+    def _send_lead_to_n8n(self, record):
+        """Send single lead to n8n and create/update log."""
+        self.ensure_one()
+
+        if not self.webhook_url:
+            raise UserError(_("n8n Webhook URL is required."))
+
+        if self.target_model != "crm.lead":
+            # For now we only support crm.lead
+            raise UserError(_("Only CRM Lead model is supported at this time."))
+
+        payload = {
+            "campaign_id": self.id,
+            "campaign_name": self.name,
+            "target_model": self.target_model,
+            "count": 1,
+            "records": [
+                {
+                    "id": record.id,
+                    "name": record.name,
+                    "email": record.email_from or "",
+                }
+            ],
         }
 
-    def _send_leads_to_n8n(self, leads, skip_already_ok=False):
-        """Send given leads to n8n one-by-one and log each attempt."""
-        if requests is None:
-            raise UserError(
-                _(
-                    "The Python 'requests' library is not available on the server. "
-                    "Please install it to send data to n8n."
-                )
+        # Create pending log
+        log = self.env["n8n.campaign.log"].create(
+            {
+                "campaign_id": self.id,
+                "lead_id": record.id,
+                "lead_odoo_id": record.id,
+                "name": record.name,
+                "email": record.email_from or "",
+                "status": "pending",
+            }
+        )
+
+        http_status = None
+        msg = ""
+        status = "ok"
+
+        try:
+            response = requests.post(self.webhook_url, json=payload, timeout=20)
+            http_status = response.status_code
+            msg = response.text[:1000] if response.text else ""
+            response.raise_for_status()
+            status = "ok"
+        except Exception as e:
+            status = "error"
+            msg = str(e)
+            _logger.error(
+                "Error sending lead %s for campaign %s to n8n: %s",
+                record.id,
+                self.id,
+                e,
             )
 
-        for campaign in self:
-            if not campaign.webhook_url:
-                raise UserError(_("Please set the n8n Webhook URL first."))
+        log.write(
+            {
+                "status": status,
+                "http_status": str(http_status) if http_status is not None else False,
+                "message": msg,
+                "sent_at": fields.Datetime.now(),
+            }
+        )
 
-            model = campaign._get_target_model()
-            if model is None:
-                raise UserError(
-                    _("Unsupported target model: %s") % (campaign.target_model,)
-                )
-
-            for lead in leads:
-                # Optionally skip records already sent successfully
-                if skip_already_ok:
-                    ok_log = campaign.log_ids.filtered(
-                        lambda l: l.lead_odoo_id == lead.id and l.status == "ok"
-                    )
-                    if ok_log:
-                        continue
-
-                payload = {
-                    "campaign_id": campaign.id,
-                    "campaign_name": campaign.name,
-                    "target_model": campaign.target_model,
-                    "count": 1,
-                    "records": [campaign._prepare_lead_payload(lead)],
-                }
-
-                # Create log as 'pending'
-                email = payload["records"][0]["email"]
-                log = self.env["n8n.campaign.log"].create(
-                    {
-                        "campaign_id": campaign.id,
-                        "lead_id": lead.id,
-                        "lead_odoo_id": lead.id,
-                        "name": lead.name or "",
-                        "email": email or "",
-                        "status": "pending",
-                    }
-                )
-
-                try:
-                    _logger.info(
-                        "Sending lead %s to n8n webhook %s",
-                        lead.id,
-                        campaign.webhook_url,
-                    )
-                    response = requests.post(
-                        campaign.webhook_url,
-                        json=payload,
-                        timeout=20,
-                    )
-                    log.http_status = str(response.status_code)
-                    log.sent_at = fields.Datetime.now()
-
-                    if response.ok:
-                        log.status = "ok"
-                    else:
-                        log.status = "error"
-                        log.message = (response.text or "")[:500]
-                except Exception as e:
-                    _logger.exception("Error sending data to n8n")
-                    log.status = "error"
-                    log.sent_at = fields.Datetime.now()
-                    log.message = str(e)[:500]
-
-                # Delay between records (if configured)
-                if campaign.delay_seconds and campaign.delay_seconds > 0:
-                    pytime.sleep(campaign.delay_seconds)
-
-    # -------------------------------------------------------------------------
-    # MANUAL ACTION (if you still want to trigger manually from debug, etc.)
-    # -------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Optional manual button (if you still use it)
+    # ------------------------------------------------------------------
     def action_send_to_n8n(self):
-        """Manual send: ignore active/time window, just send all matching."""
+        """
+        Manual send for testing: sends exactly ONE next record per campaign.
+        """
         for campaign in self:
-            model = campaign._get_target_model()
-            if not model:
+            record = campaign._get_next_lead_to_send()
+            if not record:
                 raise UserError(
-                    _("Unsupported target model: %s") % (campaign.target_model,)
+                    _("No more records to send for campaign %s.") % campaign.name
                 )
-            domain = campaign._get_domain()
-            leads = model.search(domain)
-            campaign._send_leads_to_n8n(leads, skip_already_ok=False)
-        return True
+            campaign._send_lead_to_n8n(record)
 
-    # -------------------------------------------------------------------------
-    # CRON ENTRY POINT
-    # -------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Cron entry point
+    # ------------------------------------------------------------------
     @api.model
     def cron_run_n8n_campaigns(self):
-        """Called by ir.cron: send leads for active campaigns
-        inside their local time window.
+        """
+        Called by ir.cron (every minute, for example).
+        - Checks active flag
+        - Checks start/end time window (user timezone)
+        - Respects delay_seconds using next_run_at
+        - Sends exactly ONE record per eligible campaign per run
         """
         campaigns = self.search([("is_active", "=", True)])
         for campaign in campaigns:
-            # Time window check
-            if not campaign._is_within_time_window():
-                continue
-
-            model = campaign._get_target_model()
-            if not model:
-                continue
-
             try:
-                domain = campaign._get_domain()
-            except UserError:
-                # Invalid domain -> skip this campaign for now
-                _logger.warning(
-                    "Campaign %s has invalid domain, skipping...", campaign.id
+                local_time_str, now_utc = campaign._get_user_local_time()
+
+                # Check time window
+                if not campaign._is_within_schedule(local_time_str):
+                    continue
+
+                # Respect delay
+                if campaign.next_run_at and now_utc < campaign.next_run_at:
+                    continue
+
+                # Next unsent record
+                record = campaign._get_next_lead_to_send()
+                if not record:
+                    # Nothing left to send; you could auto-deactivate here if desired
+                    continue
+
+                campaign._send_lead_to_n8n(record)
+
+                delay = max(campaign.delay_seconds or 0, 0)
+                campaign.next_run_at = now_utc + timedelta(seconds=delay)
+
+            except Exception as e:
+                _logger.error(
+                    "Error in cron_run_n8n_campaigns for campaign %s: %s",
+                    campaign.id,
+                    e,
                 )
-                continue
-
-            leads = model.search(domain)
-            if not leads:
-                continue
-
-            _logger.info(
-                "Cron: sending %s leads for campaign %s to n8n",
-                len(leads),
-                campaign.name,
-            )
-            # In cron we usually don't want duplicates → skip already OK
-            campaign._send_leads_to_n8n(leads, skip_already_ok=True)
