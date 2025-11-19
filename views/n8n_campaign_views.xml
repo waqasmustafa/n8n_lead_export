@@ -13,8 +13,9 @@
                 <field name="target_model"/>
                 <field name="webhook_url"/>
                 <field name="delay_seconds"/>
-                <field name="start_time_slot"/>
-                <field name="end_time_slot"/>
+                <field name="start_time"/>
+                <field name="end_time"/>
+                <field name="record_count" string="Matching Records"/>
                 <field name="is_active"/>
             </list>
         </field>
@@ -29,6 +30,8 @@
         <field name="arch" type="xml">
             <form string="n8n Campaign">
                 <sheet>
+
+                    <!-- TOP GROUPS -->
                     <group>
                         <group>
                             <field name="name"/>
@@ -39,11 +42,25 @@
 
                         <group string="Schedule">
                             <field name="is_active"/>
-                            <field name="start_time_slot"/>
-                            <field name="end_time_slot"/>
+                            <field name="start_time"/>
+                            <field name="end_time"/>
                         </group>
                     </group>
 
+                    <!-- FILTER SECTION (like old UI) -->
+                    <group string="Filter">
+                        <!-- Domain builder: Filter / New Rule -->
+                        <field name="filter_domain"
+                               widget="domain"
+                               options="{'model': 'crm.lead'}"/>
+
+                        <!-- Matching record counter -->
+                        <group>
+                            <field name="record_count" readonly="1" string="Matching Records"/>
+                        </group>
+                    </group>
+
+                    <!-- LOGS TAB -->
                     <notebook>
                         <page string="Logs">
                             <field name="log_ids" nolabel="1">
