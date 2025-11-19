@@ -2,17 +2,14 @@
 <odoo>
     <record id="ir_cron_n8n_campaigns" model="ir.cron">
         <field name="name">Run n8n Campaigns</field>
-        <field name="model_id" ref="model_n8n_campaign"/>
+        <field name="model_id" ref="n8n_lead_export.model_n8n_campaign"/>
         <field name="state">code</field>
         <field name="code">model._cron_run_n8n_campaigns()</field>
 
-        <!-- Har 5 minute me run -->
         <field name="interval_number">5</field>
         <field name="interval_type">minutes</field>
 
-        <!-- (optional but recommended) cron kis user ke context me chale -->
         <field name="user_id" ref="base.user_root"/>
-
         <field name="active">True</field>
     </record>
 </odoo>
