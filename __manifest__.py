@@ -4,11 +4,10 @@
     "summary": "Send filtered leads to n8n Webhook",
     "category": "CRM",
     "author": "Waqas Mustafa",
-    "depends": ["base", "crm"],
+    "depends": ["crm"],
     "data": [
         "security/ir.model.access.csv",
         "views/n8n_campaign_views.xml",
-        "data/cron.xml",
     ],
     "application": False,
     "license": "LGPL-3",
