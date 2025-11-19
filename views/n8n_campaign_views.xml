@@ -13,8 +13,7 @@
                 <field name="target_model"/>
                 <field name="webhook_url"/>
                 <field name="delay_seconds"/>
-                <field name="start_time"/>
-                <field name="end_time"/>
+                <!-- we don't need start/end time here -->
                 <field name="record_count" string="Matching Records"/>
                 <field name="is_active"/>
             </list>
@@ -47,14 +46,11 @@
                         </group>
                     </group>
 
-                    <!-- FILTER SECTION (like old UI) -->
+                    <!-- FILTER SECTION -->
                     <group string="Filter">
-                        <!-- Domain builder: Filter / New Rule -->
                         <field name="filter_domain"
                                widget="domain"
                                options="{'model': 'crm.lead'}"/>
-
-                        <!-- Matching record counter -->
                         <group>
                             <field name="record_count" readonly="1" string="Matching Records"/>
                         </group>
@@ -75,6 +71,7 @@
                             </field>
                         </page>
                     </notebook>
+
                 </sheet>
             </form>
         </field>
