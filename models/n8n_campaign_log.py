@@ -22,6 +22,7 @@ class N8nCampaignLog(models.Model):
     lead_odoo_id = fields.Integer(string="Lead ID (Odoo)")
     name = fields.Char(string="Lead Name")
     email = fields.Char(string="Email")
+    phone = fields.Char(string="Phone")
 
     status = fields.Selection(
         [

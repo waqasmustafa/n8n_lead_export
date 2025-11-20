@@ -212,6 +212,9 @@ class N8nCampaign(models.Model):
                 email = getattr(lead, "email_from", False) or getattr(
                     lead, "email", False
                 )
+                phone = getattr(lead, "phone", False) or getattr(
+                    lead, "mobile", False
+                )
 
                 # 1) create log as pending
                 log = Log.create(
@@ -221,6 +224,7 @@ class N8nCampaign(models.Model):
                         "lead_odoo_id": lead.id,
                         "name": lead.name or "",
                         "email": email or "",
+                        "phone": phone or "",
                         "status": "pending",
                     }
                 )
@@ -236,6 +240,7 @@ class N8nCampaign(models.Model):
                             "id": lead.id,
                             "name": lead.name or "",
                             "email": email or "",
+                            "phone": phone or "",
                         }
                     ],
                 }

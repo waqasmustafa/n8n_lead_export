@@ -74,6 +74,7 @@
                                 <list create="0" edit="0" delete="0">
                                     <field name="name" string="Lead Name"/>
                                     <field name="email"/>
+                                    <field name="phone"/>
                                     <field name="status"/>
                                     <field name="http_status"/>
                                     <field name="sent_at"/>
