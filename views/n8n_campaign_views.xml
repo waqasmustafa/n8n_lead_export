@@ -99,5 +99,6 @@
     <menuitem id="menu_ai_call_campaign_root"
               name="AI Call Campaigns"
               action="action_ai_call_campaign"
+              web_icon="n8n_lead_export,static/description/icon.png"
               sequence="50"/>
 </odoo>
