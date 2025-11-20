@@ -17,7 +17,7 @@ _logger = logging.getLogger(__name__)
 
 class N8nCampaign(models.Model):
     _name = "n8n.campaign"
-    _description = "n8n Campaign Export"
+    _description = "AI Call Campaign Export"
 
     # ---------------------------------------------------
     # FIELDS
@@ -37,9 +37,9 @@ class N8nCampaign(models.Model):
     )
 
     webhook_url = fields.Char(
-        string="n8n Webhook URL",
+        string="Webhook URL",
         required=True,
-        help="Paste the URL of the n8n webhook.",
+        help="Paste the URL of the webhook.",
     )
 
     filter_domain = fields.Char(
