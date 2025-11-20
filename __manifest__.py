@@ -27,7 +27,6 @@ Key Features:
         "views/n8n_campaign_views.xml",
         "data/n8n_cron.xml",
     ],
-    "icon": "static/description/icon.png",
     "application": True,
     "license": "LGPL-3",
 }
