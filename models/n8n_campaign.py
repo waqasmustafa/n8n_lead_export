@@ -1,6 +1,6 @@
-import ast
 import logging
 import time
+import pytz
 from datetime import time as dt_time  # for time-of-day comparison
 
 from odoo import models, fields, api, _
@@ -139,14 +139,33 @@ class N8nCampaign(models.Model):
 
         # Use campaign owner timezone if available, else current user
         owner = self.create_uid or self.env.user
+        tz_name = owner.tz or "UTC"
+        
+        try:
+            user_tz = pytz.timezone(tz_name)
+        except pytz.UnknownTimeZoneError:
+            _logger.warning("Unknown timezone %s for user %s, falling back to UTC", tz_name, owner.name)
+            user_tz = pytz.utc
 
         now_utc = fields.Datetime.now()
-        # Convert to owner's local time using Odoo helper
-        local_now = fields.Datetime.context_timestamp(owner, now_utc)
+        # Convert UTC now to owner's timezone
+        # fields.Datetime.now() returns naive datetime (implicitly UTC in Odoo)
+        utc_now_aware = pytz.utc.localize(now_utc)
+        local_now = utc_now_aware.astimezone(user_tz)
         local_t = local_now.time()
 
         start_t = self._float_to_time(self.start_time) or dt_time(0, 0, 0)
         end_t = self._float_to_time(self.end_time) or dt_time(23, 59, 59)
+
+        _logger.info(
+            "Campaign '%s' Time Check: Local Time (%s) = %s. Window: %s - %s. Match? %s",
+            self.name,
+            tz_name,
+            local_t,
+            start_t,
+            end_t,
+            start_t <= local_t <= end_t
+        )
 
         # Simple inclusive check (no overnight window for now)
         return start_t <= local_t <= end_t
