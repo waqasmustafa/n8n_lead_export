@@ -23,6 +23,7 @@ class N8nCampaignLog(models.Model):
     name = fields.Char(string="Lead Name")
     email = fields.Char(string="Email")
     phone = fields.Char(string="Phone")
+    lead_tags = fields.Many2many(related="lead_id.tag_ids", string="Tags")
 
     status = fields.Selection(
         [

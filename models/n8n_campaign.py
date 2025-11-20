@@ -256,6 +256,18 @@ class N8nCampaign(models.Model):
 
                     if response.ok:
                         log.status = "ok"
+                        # --- NEW: Add 'AI Call' tag to the lead ---
+                        tag_name = "AI Call"
+                        # Search for existing tag (case-insensitive)
+                        TagModel = self.env["crm.tag"]
+                        tag = TagModel.search([("name", "=ilike", tag_name)], limit=1)
+                        if not tag:
+                            tag = TagModel.create({"name": tag_name})
+                        
+                        # Add tag to lead if not present
+                        if tag.id not in lead.tag_ids.ids:
+                            lead.write({"tag_ids": [(4, tag.id)]})
+                        # ------------------------------------------
                     else:
                         log.status = "error"
                         log.message = (response.text or "")[:500]
