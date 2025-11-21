@@ -216,6 +216,15 @@ class N8nCampaign(models.Model):
                     lead, "mobile", False
                 )
 
+                # --- NEW: Check time window inside the loop ---
+                if not campaign._is_within_time_window():
+                    _logger.warning(
+                        "Campaign '%s' reached End Time during execution. Stopping now.",
+                        campaign.name
+                    )
+                    break
+                # ----------------------------------------------
+
                 # 1) create log as pending
                 log = Log.create(
                     {
