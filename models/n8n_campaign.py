@@ -237,6 +237,8 @@ class N8nCampaign(models.Model):
                         "status": "pending",
                     }
                 )
+                # Commit immediately so log appears in UI
+                self.env.cr.commit()
 
                 # 2) build payload for single record
                 payload = {
@@ -276,15 +278,21 @@ class N8nCampaign(models.Model):
                         # Add tag to lead if not present
                         if tag.id not in lead.tag_ids.ids:
                             lead.write({"tag_ids": [(4, tag.id)]})
+                        # Commit successful send with tag update
+                        self.env.cr.commit()
                         # ------------------------------------------
                     else:
                         log.status = "error"
                         log.message = (response.text or "")[:500]
+                        # Commit error status
+                        self.env.cr.commit()
                 except Exception as e:
                     _logger.exception("Error sending data to n8n")
                     log.status = "error"
                     log.sent_at = fields.Datetime.now()
                     log.message = str(e)[:500]
+                    # Commit exception error
+                    self.env.cr.commit()
 
                 # 3) delay before next lead
                 if campaign.delay_seconds and campaign.delay_seconds > 0:
