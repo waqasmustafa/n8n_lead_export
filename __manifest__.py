@@ -20,7 +20,7 @@ Key Features:
 *   **Manual & Auto Modes:** Trigger campaigns manually or let the Cron job handle it automatically.
     """,
     "category": "CRM",
-    "author": "Waqas Mustafa",
+    "author": "Waqas Mustafaa",
     "depends": ["crm"],
     "data": [
         "security/ir.model.access.csv",
