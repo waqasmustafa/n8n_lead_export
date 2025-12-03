@@ -1,6 +1,7 @@
 import ast
 import logging
 import time
+import threading
 import pytz
 from datetime import time as dt_time  # for time-of-day comparison
 
@@ -301,6 +302,46 @@ class N8nCampaign(models.Model):
         return True
 
     # ---------------------------------------------------
+    # THREAD-SAFE WRAPPER FOR PARALLEL EXECUTION
+    # ---------------------------------------------------
+    def _run_campaign_in_thread(self):
+        """
+        Thread-safe wrapper for running a single campaign.
+        Creates a new database cursor for thread safety.
+        """
+        self.ensure_one()
+        
+        try:
+            # Create a new cursor for this thread
+            with self.env.registry.cursor() as new_cr:
+                # Create new environment with the new cursor
+                new_env = self.env(cr=new_cr)
+                # Get the campaign record in the new environment
+                campaign = new_env['n8n.campaign'].browse(self.id)
+                
+                _logger.info(
+                    "Thread started for campaign '%s' (ID: %d)",
+                    campaign.name,
+                    campaign.id
+                )
+                
+                # Execute the campaign
+                campaign._send_pending_leads_via_n8n()
+                
+                _logger.info(
+                    "Thread completed for campaign '%s' (ID: %d)",
+                    campaign.name,
+                    campaign.id
+                )
+        except Exception as e:
+            _logger.exception(
+                "Error in thread for campaign '%s' (ID: %d): %s",
+                self.name,
+                self.id,
+                str(e)
+            )
+
+    # ---------------------------------------------------
     # MANUAL ACTION (debug / manual send)
     # ---------------------------------------------------
     def action_send_to_n8n(self):
@@ -312,13 +353,53 @@ class N8nCampaign(models.Model):
     # ---------------------------------------------------
     @api.model
     def _cron_run_n8n_campaigns(self):
-        """Cron: auto-run active campaigns inside their time window."""
+        """Cron: auto-run active campaigns in parallel using threads."""
         campaigns = self.search([("is_active", "=", True)])
         if not campaigns:
+            _logger.info("No active campaigns found")
             return
 
+        # Filter campaigns within time window
+        campaigns_to_run = []
         for campaign in campaigns:
-            # Respect time window (owner's timezone)
-            if not campaign._is_within_time_window():
-                continue
-            campaign._send_pending_leads_via_n8n()
+            if campaign._is_within_time_window():
+                campaigns_to_run.append(campaign)
+                _logger.info(
+                    "Queued campaign '%s' (ID: %d) for parallel execution",
+                    campaign.name,
+                    campaign.id
+                )
+            else:
+                _logger.info(
+                    "Skipping campaign '%s' (ID: %d) - outside time window",
+                    campaign.name,
+                    campaign.id
+                )
+
+        if not campaigns_to_run:
+            _logger.info("No campaigns within time window")
+            return
+
+        _logger.info(
+            "Starting %d campaign(s) in parallel",
+            len(campaigns_to_run)
+        )
+
+        # Create and start threads
+        threads = []
+        for campaign in campaigns_to_run:
+            thread = threading.Thread(
+                target=campaign._run_campaign_in_thread,
+                name=f"Campaign-{campaign.id}-{campaign.name}"
+            )
+            thread.daemon = True  # Thread will exit when main program exits
+            threads.append(thread)
+            thread.start()
+            _logger.info("Started thread for campaign '%s'", campaign.name)
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+            _logger.info("Thread '%s' completed", thread.name)
+
+        _logger.info("All campaigns completed")
