@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+
+    <!-- List View -->
+    <record id="view_ai_call_campaign_list" model="ir.ui.view">
+        <field name="name">ai_call.campaign.list</field>
+        <field name="model">n8n.campaign</field>
+        <field name="type">list</field>
+        <field name="arch" type="xml">
+            <list string="AI Call Campaigns">
+                <field name="name"/>
+                <field name="target_model"/>
+                <field name="webhook_url"/>
+                <field name="delay_seconds"/>
+                <field name="start_time" widget="float_time"/>
+                <field name="end_time" widget="float_time"/>
+                <field name="is_active"/>
+                <field name="record_count"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_ai_call_campaign_form" model="ir.ui.view">
+        <field name="name">ai_call.campaign.form</field>
+        <field name="model">n8n.campaign</field>
+        <field name="arch" type="xml">
+            <form string="AI Call Campaign">
+
+                <header>
+                    <!-- Manual send button -->
+                    <button name="action_send_to_n8n"
+                            type="object"
+                            class="btn-primary"
+                            string="Send Calls"/>
+                </header>
+
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="target_model"/>
+                            <field name="webhook_url"
+                                   placeholder="Paste your Webhook URL"/>
+                            <field name="tag_ids"
+                                   widget="many2many_tags"
+                                   options="{'no_create': True}"
+                                   placeholder="Add Custom Tags"/>       
+                        </group>
+                        <group>
+                            <!-- Toggle -->
+                            <field name="is_active" widget="boolean_toggle"/>
+
+                            <field name="delay_seconds"
+                                   placeholder="0"
+                                   help="Delay in seconds between each record send."/>
+                            <!-- Start / End time fields -->
+                            <field name="start_time"
+                                   widget="float_time"
+                                   help="Local time-of-day when this campaign may start sending."/>
+                            <field name="end_time"
+                                   widget="float_time"
+                                   help="Local time-of-day when this campaign must stop sending."/>
+                        </group>
+                    </group>
+
+                    <group string="Vodia Script Generator">
+                        <group>
+                            <field name="vodia_openai_api_key"/>
+                            <field name="vodia_assistant_id"/>
+                            <field name="vodia_model"/>
+                            <field name="openai_voice"/>
+                        </group>
+                        <group>
+                            <field name="vodia_webhook_url"/>
+                            <field name="vodia_webhook_secret"/>
+                            <field name="vodia_webhook_url_endcall"/>
+                        </group>
+                        <group string="Technical Configuration (Admin Only)" groups="base.group_system">
+                            <field name="caller_id"/>
+                            <field name="n8n_ai_tool_webhook"/>
+                            <field name="n8n_ai_transcript_webhook"/>
+                            <field name="n8n_ai_webhook_secret" password="True"/>
+                        </group>
+                        <group string="Appointment Booking Config">
+                            <field name="booking_server_url"/>
+                            <field name="appointment_type_id"/>
+                            <field name="initial_message" placeholder="Leave empty for IVR mode..."/>
+                        </group>
+
+                        <div style="margin-top: 10px; margin-bottom: 5px;">
+                            <label for="vodia_instructions" string="Instructions (System Prompt)"/>
+                            <div class="oe_right" style="display: inline-block; float: right;">
+                                <button name="action_fetch_assistant_instructions"
+                                        type="object"
+                                        string="Fetch from OpenAI"
+                                        class="btn-sm btn-info me-2"/>
+                                <button name="action_update_assistant_instructions"
+                                        type="object"
+                                        string="Update OpenAI Agent"
+                                        class="btn-sm btn-warning"
+                                        confirm="Are you sure you want to overwrite the instructions on OpenAI?"/>
+                            </div>
+                        </div>
+                        <field name="vodia_instructions" placeholder="Enter instructions here..." style="height: 220px; overflow-y: scroll; border: 1px solid #ccc; padding: 5px;" nolabel="1"/>
+                        <div style="margin-top: 20px; margin-bottom: 20px;">
+                            <!-- Removed Generate/Clear buttons -->
+                        </div>
+                        <field name="vodia_generated_script" widget="ace" options="{'mode': 'javascript'}" height="150px"/>
+                    </group>
+
+                    <group string="Filter">
+                        <field name="filter_domain"
+                               widget="domain"
+                               options="{'model': 'crm.lead'}"/>
+                        <field name="record_count" readonly="1"/>
+                    </group>
+
+                    <!-- Simple logs display (let Odoo handle subview) -->
+                    <notebook>
+                        <page string="Logs">
+                            <field name="log_ids" nolabel="1">
+                                <list create="0" edit="0" delete="0">
+                                    <field name="name" string="Lead Name"/>
+                                    <field name="lead_tags" widget="many2many_tags"/>
+                                    <field name="email"/>
+                                    <field name="phone"/>
+                                    <field name="status"/>
+                                    <field name="http_status"/>
+                                    <field name="sent_at"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_ai_call_campaign" model="ir.actions.act_window">
+        <field name="name">AI Call</field>
+        <field name="res_model">n8n.campaign</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- Menu (top level) -->
+    <menuitem id="menu_ai_call_campaign_root"
+              name="AI Call Campaigns"
+              action="action_ai_call_campaign"
+              web_icon="n8n_lead_export,static/description/icon.png"
+              sequence="50"/>
+
+    <!-- Inbound Routing Menu -->
+    <record id="view_n8n_inbound_config_tree" model="ir.ui.view">
+        <field name="name">n8n.inbound.config.tree</field>
+        <field name="model">n8n.inbound.config</field>
+        <field name="arch" type="xml">
+            <list string="Inbound Routes">
+                <field name="name"/>
+                <field name="assistant_id"/>
+                <field name="model"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_n8n_inbound_config_form" model="ir.ui.view">
+        <field name="name">n8n.inbound.config.form</field>
+        <field name="model">n8n.inbound.config</field>
+        <field name="arch" type="xml">
+            <form string="Inbound Route">
+                <header>
+                    <button name="action_sync_openai" string="Update OpenAI Agent" type="object" class="oe_highlight"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="assistant_id"/>
+                            <field name="openai_api_key" password="True"/>
+                            <field name="model"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Instructions">
+                            <field name="instructions"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_n8n_inbound_config" model="ir.actions.act_window">
+        <field name="name">Inbound Call Routes</field>
+        <field name="res_model">n8n.inbound.config</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_n8n_inbound_config"
+              name="Inbound Routing"
+              parent="menu_ai_call_campaign_root"
+              action="action_n8n_inbound_config"
+              sequence="20"/>
+</odoo>

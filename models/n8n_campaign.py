@@ -1,0 +1,443 @@
+import ast
+import logging
+import time
+import threading
+import pytz
+from datetime import time as dt_time  # for time-of-day comparison
+
+from odoo import models, fields, api, _
+from odoo.exceptions import UserError
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+_logger = logging.getLogger(__name__)
+
+
+class N8nCampaign(models.Model):
+    _name = "n8n.campaign"
+    _description = "AI Call Campaign Export"
+
+    # ---------------------------------------------------
+    # FIELDS
+    # ---------------------------------------------------
+    name = fields.Char(
+        string="Campaign Name",
+        required=True,
+    )
+
+    target_model = fields.Selection(
+        [
+            ("crm.lead", "Lead / Opportunity"),
+        ],
+        string="Target From",
+        default="crm.lead",
+        required=True,
+    )
+
+    webhook_url = fields.Char(
+        string="Webhook URL",
+        required=True,
+        help="Paste the URL of the webhook.",
+    )
+    
+    tag_ids = fields.Many2many(
+        "crm.tag",
+        string="Add Custom Tags",
+        help="Select tags for this campaign.",
+    )
+
+    filter_domain = fields.Char(
+        string="Filter",
+        default="[]",
+        help="Build record filter using domain widget.",
+    )
+
+    record_count = fields.Integer(
+        string="Matching Records",
+        compute="_compute_record_count",
+        readonly=True,
+    )
+
+    delay_seconds = fields.Integer(
+        string="Delay (seconds)",
+        default=0,
+        help="Wait this many seconds before sending the next record to n8n.",
+    )
+
+    # 🔁 toggle field
+    is_active = fields.Boolean(
+        string="Active",
+        default=False,
+        help="If active, this campaign will be processed automatically by the scheduler.",
+    )
+
+    # 🕒 start / end time (time-of-day, local to owner)
+    start_time = fields.Float(
+        string="Start Time",
+        help="Local time-of-day (campaign owner's timezone) when sending is allowed to start.",
+        default=0.0,  # 00:00
+    )
+
+    end_time = fields.Float(
+        string="End Time",
+        help="Local time-of-day (campaign owner's timezone) when sending must stop.",
+        default=23.99,  # ~23:59
+    )
+
+    log_ids = fields.One2many(
+        "n8n.campaign.log",
+        "campaign_id",
+        string="Send Logs",
+        readonly=True,
+    )
+
+    # ---------------------------------------------------
+    # COMPUTE & HELPERS
+    # ---------------------------------------------------
+    @api.depends("filter_domain", "target_model")
+    def _compute_record_count(self):
+        for campaign in self:
+            model = campaign._get_target_model()
+            domain = campaign._get_domain()
+            if not model:
+                campaign.record_count = 0
+                continue
+            campaign.record_count = model.search_count(domain)
+
+    def _get_target_model(self):
+        """Return env model object based on target_model selection."""
+        self.ensure_one()
+        if self.target_model == "crm.lead":
+            return self.env["crm.lead"]
+        return None
+
+    def _get_domain(self):
+        """Parse the domain string into a Python list."""
+        self.ensure_one()
+        if not self.filter_domain:
+            return []
+        try:
+            value = ast.literal_eval(self.filter_domain)
+            if isinstance(value, (list, tuple)):
+                return value
+            raise ValueError("Domain must be list/tuple")
+        except Exception as e:
+            raise UserError(_("Invalid domain in Filter: %s") % e)
+
+    # ---- Time helpers -----------------------------------------------------
+
+    @staticmethod
+    def _float_to_time(value):
+        """Convert float hour (e.g. 13.5) into datetime.time(13, 30)."""
+        if value is False or value is None:
+            return None
+        hours = int(value)
+        minutes = int(round((value - hours) * 60))
+        # safety clamp
+        hours = max(0, min(23, hours))
+        minutes = max(0, min(59, minutes))
+        return dt_time(hours, minutes, 0)
+
+    def _is_within_time_window(self):
+        """Return True if current time (owner's timezone) is within Start–End window."""
+        self.ensure_one()
+
+        # Use campaign owner timezone if available, else current user
+        owner = self.create_uid or self.env.user
+        tz_name = owner.tz or "UTC"
+        
+        try:
+            user_tz = pytz.timezone(tz_name)
+        except pytz.UnknownTimeZoneError:
+            _logger.warning("Unknown timezone %s for user %s, falling back to UTC", tz_name, owner.name)
+            user_tz = pytz.utc
+
+        now_utc = fields.Datetime.now()
+        # Convert UTC now to owner's timezone
+        # fields.Datetime.now() returns naive datetime (implicitly UTC in Odoo)
+        utc_now_aware = pytz.utc.localize(now_utc)
+        local_now = utc_now_aware.astimezone(user_tz)
+        local_t = local_now.time()
+
+        start_t = self._float_to_time(self.start_time) or dt_time(0, 0, 0)
+        end_t = self._float_to_time(self.end_time) or dt_time(23, 59, 59)
+
+        _logger.info(
+            "Campaign '%s' Time Check: Local Time (%s) = %s. Window: %s - %s. Match? %s",
+            self.name,
+            tz_name,
+            local_t,
+            start_t,
+            end_t,
+            start_t <= local_t <= end_t
+        )
+
+        # Simple inclusive check (no overnight window for now)
+        return start_t <= local_t <= end_t
+
+    # ---------------------------------------------------
+    # CORE SENDING LOGIC (reused by cron + manual)
+    # ---------------------------------------------------
+    def _send_pending_leads_via_n8n(self):
+        """
+        Send ALL matching leads to n8n (always resend),
+        respecting delay_seconds and logging each attempt.
+        """
+        if requests is None:
+            raise UserError(
+                _(
+                    "The Python 'requests' library is not available on the server. "
+                    "Please install it to send data to n8n."
+                )
+            )
+
+        for campaign in self:
+            if not campaign.webhook_url:
+                raise UserError(_("Please set the n8n Webhook URL first."))
+
+            model = campaign._get_target_model()
+            if model is None:
+                raise UserError(
+                    _("Unsupported target model: %s") % (campaign.target_model,)
+                )
+
+            domain = campaign._get_domain()
+            leads = model.search(domain)
+
+            _logger.info(
+                "Sending %s records to n8n webhook %s",
+                len(leads),
+                campaign.webhook_url,
+            )
+
+            Log = self.env["n8n.campaign.log"]
+
+            for lead in leads:
+                email = getattr(lead, "email_from", False) or getattr(
+                    lead, "email", False
+                )
+                phone = getattr(lead, "phone", False) or getattr(
+                    lead, "mobile", False
+                )
+
+                # --- NEW: Check time window inside the loop ---
+                if not campaign._is_within_time_window():
+                    _logger.warning(
+                        "Campaign '%s' reached End Time during execution. Stopping now.",
+                        campaign.name
+                    )
+                    break
+                # ----------------------------------------------
+
+                # 1) create log as pending
+                log = Log.create(
+                    {
+                        "campaign_id": campaign.id,
+                        "lead_id": lead.id,
+                        "lead_odoo_id": lead.id,
+                        "name": lead.name or "",
+                        "email": email or "",
+                        "phone": phone or "",
+                        "status": "pending",
+                    }
+                )
+                # Commit immediately so log appears in UI
+                self.env.cr.commit()
+
+                # 2) build payload for single record
+                payload = {
+                    "campaign_id": campaign.id,
+                    "campaign_name": campaign.name,
+                    "tag_ids": campaign.tag_ids.ids,  # Send list of Tag IDs
+                    # --- NEW: Dynamic AI Webhooks ---
+                    "caller_id": campaign.caller_id or "",  # NEW: Custom Caller ID
+                    "tool_webhook_url": campaign.n8n_ai_tool_webhook or "",
+                    "transcript_webhook_url": campaign.n8n_ai_transcript_webhook or "",
+                    "ai_webhook_secret": campaign.n8n_ai_webhook_secret or "",
+                    # Bypass n8n prompt webhook if these are provided directly
+                    "assistant_id": campaign.vodia_assistant_id or "",
+                    "openai_api_key": campaign.vodia_openai_api_key or "",
+                    "voice": campaign.openai_voice or "alloy",  # NEW: Voice Selection
+                    # --- Appointment Config ---
+                    "booking_server_url": campaign.booking_server_url or "",
+                    "appointment_type_id": campaign.appointment_type_id or 11,
+                    "initial_message": campaign.initial_message or "",
+                    # --------------------------------
+                    "target_model": campaign.target_model,
+                    "count": 1,
+                    "records": [
+                        {
+                            "id": lead.id,
+                            "name": lead.name or "",
+                            "email": email or "",
+                            "phone": phone or "",
+                            "social_media_platform": getattr(lead, "x_studio_char_field_8e4_1jbljc381", False) or "",
+                            "sm_url": getattr(lead, "x_studio_sm_url", False) or "",
+                            "first_message": getattr(lead, "x_studio_first_message_1", False) or "",
+                            "followup_message": getattr(lead, "x_studio_followup_message_1", False) or "",
+                            "social_media_handle": getattr(lead, "x_studio_social_media_handle", False) or "",
+                            "lead_type": getattr(lead, "x_studio_lead_type_1", False) or "",
+                            "next_step": getattr(lead, "x_studio_next_step_1", False) or "",
+                            "follower_count": getattr(lead, "x_studio_follower_count", False) or "",
+                            "segment": getattr(lead, "x_studio_segment", False) or "",
+                            "google_place_id": getattr(lead, "x_studio_google_place_id", False) or "",
+                            "street": getattr(lead, "street", False) or "",
+                            "street2": getattr(lead, "street2", False) or "",
+                            "city": getattr(lead, "city", False) or "",
+                            "state": lead.state_id.name if lead.state_id else "",
+                            "zip": getattr(lead, "zip", False) or "",
+                            "country": lead.country_id.name if lead.country_id else "",
+                            "ai_tag_summary": getattr(lead, "x_studio_ai_tag_summary", False) or "",
+                        }
+                    ],
+                }
+
+                try:
+                    response = requests.post(
+                        campaign.webhook_url,
+                        json=payload,
+                        timeout=20,
+                    )
+                    log.http_status = str(response.status_code)
+                    log.sent_at = fields.Datetime.now()
+
+                    if response.ok:
+                        log.status = "ok"
+                        # --- NEW: Add 'AI Call' tag to the lead ---
+                        tag_name = "AI Call"
+                        # Search for existing tag (case-insensitive)
+                        TagModel = self.env["crm.tag"]
+                        tag = TagModel.search([("name", "=ilike", tag_name)], limit=1)
+                        if not tag:
+                            tag = TagModel.create({"name": tag_name})
+                        
+                        # Add tag to lead if not present
+                        if tag.id not in lead.tag_ids.ids:
+                            lead.write({"tag_ids": [(4, tag.id)]})
+                        # Commit successful send with tag update
+                        self.env.cr.commit()
+                        # ------------------------------------------
+                    else:
+                        log.status = "error"
+                        log.message = (response.text or "")[:500]
+                        # Commit error status
+                        self.env.cr.commit()
+                except Exception as e:
+                    _logger.exception("Error sending data to n8n")
+                    log.status = "error"
+                    log.sent_at = fields.Datetime.now()
+                    log.message = str(e)[:500]
+                    # Commit exception error
+                    self.env.cr.commit()
+
+                # 3) delay before next lead
+                if campaign.delay_seconds and campaign.delay_seconds > 0:
+                    time.sleep(campaign.delay_seconds)
+
+        return True
+
+    # ---------------------------------------------------
+    # THREAD-SAFE WRAPPER FOR PARALLEL EXECUTION
+    # ---------------------------------------------------
+    def _run_campaign_in_thread(self):
+        """
+        Thread-safe wrapper for running a single campaign.
+        Creates a new database cursor for thread safety.
+        """
+        self.ensure_one()
+        
+        try:
+            # Create a new cursor for this thread
+            with self.env.registry.cursor() as new_cr:
+                # Create new environment with the new cursor
+                new_env = self.env(cr=new_cr)
+                # Get the campaign record in the new environment
+                campaign = new_env['n8n.campaign'].browse(self.id)
+                
+                _logger.info(
+                    "Thread started for campaign '%s' (ID: %d)",
+                    campaign.name,
+                    campaign.id
+                )
+                
+                # Execute the campaign
+                campaign._send_pending_leads_via_n8n()
+                
+                _logger.info(
+                    "Thread completed for campaign '%s' (ID: %d)",
+                    campaign.name,
+                    campaign.id
+                )
+        except Exception as e:
+            _logger.exception(
+                "Error in thread for campaign '%s' (ID: %d): %s",
+                self.name,
+                self.id,
+                str(e)
+            )
+
+    # ---------------------------------------------------
+    # MANUAL ACTION (debug / manual send)
+    # ---------------------------------------------------
+    def action_send_to_n8n(self):
+        """Manual trigger – send all matching leads now."""
+        return self._send_pending_leads_via_n8n()
+
+    # ---------------------------------------------------
+    # CRON ENTRY POINT
+    # ---------------------------------------------------
+    @api.model
+    def _cron_run_n8n_campaigns(self):
+        """Cron: auto-run active campaigns in parallel using threads."""
+        campaigns = self.search([("is_active", "=", True)])
+        if not campaigns:
+            _logger.info("No active campaigns found")
+            return
+
+        # Filter campaigns within time window
+        campaigns_to_run = []
+        for campaign in campaigns:
+            if campaign._is_within_time_window():
+                campaigns_to_run.append(campaign)
+                _logger.info(
+                    "Queued campaign '%s' (ID: %d) for parallel execution",
+                    campaign.name,
+                    campaign.id
+                )
+            else:
+                _logger.info(
+                    "Skipping campaign '%s' (ID: %d) - outside time window",
+                    campaign.name,
+                    campaign.id
+                )
+
+        if not campaigns_to_run:
+            _logger.info("No campaigns within time window")
+            return
+
+        _logger.info(
+            "Starting %d campaign(s) in parallel",
+            len(campaigns_to_run)
+        )
+
+        # Create and start threads
+        threads = []
+        for campaign in campaigns_to_run:
+            thread = threading.Thread(
+                target=campaign._run_campaign_in_thread,
+                name=f"Campaign-{campaign.id}-{campaign.name}"
+            )
+            thread.daemon = True  # Thread will exit when main program exits
+            threads.append(thread)
+            thread.start()
+            _logger.info("Started thread for campaign '%s'", campaign.name)
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+            _logger.info("Thread '%s' completed", thread.name)
+
+        _logger.info("All campaigns completed")

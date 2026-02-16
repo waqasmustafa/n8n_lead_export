@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_n8n_campaign_user,n8n.campaign user,model_n8n_campaign,base.group_user,1,1,1,1
+access_n8n_campaign_log_user,n8n.campaign.log user,model_n8n_campaign_log,base.group_user,1,1,1,0
+access_n8n_inbound_config_user,n8n.inbound.config user,model_n8n_inbound_config,base.group_user,1,1,1,1
+access_ai_inbound_agent_user,ai.inbound.agent user,model_ai_inbound_agent,base.group_user,1,1,1,1
+access_ai_inbound_whitelist_user,ai.inbound.whitelist user,model_ai_inbound_whitelist,base.group_user,1,1,1,1
