@@ -42,10 +42,10 @@
                             </group>
                             <label for="allowed_list_ids"/>
                             <field name="allowed_list_ids">
-                                <tree editable="bottom">
+                                <list editable="bottom">
                                     <field name="phone_number"/>
                                     <field name="note"/>
-                                </tree>
+                                </list>
                             </field>
                         </page>
                     </notebook>
@@ -59,12 +59,12 @@
         <field name="name">ai.inbound.agent.tree</field>
         <field name="model">ai.inbound.agent</field>
         <field name="arch" type="xml">
-            <tree string="Inbound AI Agents">
+            <list string="Inbound AI Agents">
                 <field name="name"/>
                 <field name="inbound_number"/>
                 <field name="agent_type"/>
                 <field name="active"/>
-            </tree>
+            </list>
         </field>
     </record>
 
